@@ -19,12 +19,12 @@ import ccxt
 
 # ===================== تنظیمات قابل تغییر =====================
 
-SYMBOLS = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
-    "ADA/USDT", "DOGE/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
-    "LTC/USDT", "TRX/USDT", "ATOM/USDT", "NEAR/USDT", "APT/USDT",
-    "ARB/USDT", "OP/USDT", "SUI/USDT", "TON/USDT", "ZEC/USDT",
-]
+# به‌جای لیست ثابت، هر بار که اسکریپت اجرا می‌شه (هر ۱۵ دقیقه)، خودش از Toobit
+# همه‌ی جفت‌ارزهای USDT رو می‌گیره، بر اساس حجم معامله (quoteVolume) مرتب می‌کنه
+# و همین تعداد از پرحجم‌ترین‌ها رو انتخاب می‌کنه. یعنی لیست همیشه به‌روزه، نه
+# فقط هر ۱ ساعت.
+TOP_N_BY_VOLUME = 20
+QUOTE_CURRENCY = "USDT"
 
 # تایم‌فریم‌هایی که چک می‌شن، و تایم‌فریم بالاتر (HTF) متناظر هرکدوم
 # برای فیلتر Multi-Timeframe
@@ -109,6 +109,34 @@ def adx(df: pd.DataFrame, length: int) -> pd.Series:
 
 
 # ===================== دیتا و سیگنال =====================
+
+
+def get_top_symbols_by_volume(exchange, quote: str = QUOTE_CURRENCY, top_n: int = TOP_N_BY_VOLUME) -> list:
+    """
+    همه‌ی جفت‌ارزهای بازار اسپات Toobit با ارز پایه‌ی quote (مثلاً USDT) رو
+    می‌گیره، بر اساس حجم معامله‌ی ۲۴ ساعته (quoteVolume) نزولی مرتب می‌کنه،
+    و اسم N تای اول رو برمی‌گردونه.
+    """
+    tickers = exchange.fetch_tickers()
+    candidates = []
+    for symbol, ticker in tickers.items():
+        if not symbol.endswith(f"/{quote}"):
+            continue
+        volume = ticker.get("quoteVolume")
+        if volume is None:
+            # بعضی صرافی‌ها quoteVolume نمی‌دن، از baseVolume * آخرین قیمت تخمین می‌زنیم
+            base_volume = ticker.get("baseVolume")
+            last_price = ticker.get("last")
+            if base_volume is not None and last_price is not None:
+                volume = base_volume * last_price
+        if volume is None:
+            continue
+        candidates.append((symbol, volume))
+
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    top_symbols = [symbol for symbol, _ in candidates[:top_n]]
+    print(f"لیست {len(top_symbols)} نماد پرحجم فعلی: {top_symbols}")
+    return top_symbols
 
 
 def fetch_ohlcv_df(exchange, symbol: str, timeframe: str, limit: int = 300) -> pd.DataFrame:
@@ -247,7 +275,17 @@ def main():
     state = load_state()
     new_alerts = 0
 
-    for symbol in SYMBOLS:
+    try:
+        symbols = get_top_symbols_by_volume(exchange)
+    except Exception as e:
+        print(f"خطا در گرفتن لیست نمادهای پرحجم: {e}")
+        return
+
+    if not symbols:
+        print("هیچ نمادی پیدا نشد، اجرا متوقف شد.")
+        return
+
+    for symbol in symbols:
         for timeframe, htf_timeframe in TIMEFRAMES.items():
             state_key = f"{symbol}_{timeframe}"
             try:
